@@ -1,4 +1,4 @@
-// ── TAKSHASHILA — Attendance Backend (v10) ──
+// ── TAKSHASHILA — Attendance Backend (v11) ──
 // Deploy as Web App: Execute as "Me", Access "Anyone"
 //
 // Layout: one tab per year ("2025", "2026" …)
@@ -203,6 +203,28 @@ function doGet(e) {
       });
 
       return json({ ok: true, records }, callback);
+    }
+
+    // ── Delete a single date's row ──
+    if (action === "deleteDate") {
+      const dateStr = e.parameter.date;
+      if (!dateStr) return json({ ok: false, error: "No date provided" }, callback);
+
+      const sheet = ss.getSheetByName(String(dateStr).split('-')[0]);
+      if (!sheet) return json({ ok: true, deleted: false }, callback);
+
+      const lastRow = sheet.getLastRow();
+      if (lastRow >= 2) {
+        const dates = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+        for (let i = 0; i < dates.length; i++) {
+          if (formatDate(dates[i][0]) === dateStr) {
+            sheet.deleteRow(i + 2);
+            styleSheet(sheet);
+            return json({ ok: true, deleted: true }, callback);
+          }
+        }
+      }
+      return json({ ok: true, deleted: false }, callback);
     }
 
     // ── Delete all data ──

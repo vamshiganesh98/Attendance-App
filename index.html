@@ -748,7 +748,40 @@ function toggle(name) {
 }
 function markAll()       { students.forEach(s => attendance[s] = 'present'); renderGrid(); }
 function markAllAbsent() { students.forEach(s => attendance[s] = 'absent');  renderGrid(); }
-function clearAll()      { students.forEach(s => attendance[s] = 'unmarked'); renderGrid(); }
+
+async function clearAll() {
+  if (!confirm(`Reset attendance for ${activeDate}?\n\nThis clears all marks for this date and removes any saved record for it (local + Google Sheet).`)) return;
+
+  // Reset in-memory marks
+  students.forEach(s => attendance[s] = 'unmarked');
+  renderGrid();
+
+  // Remove this date's record locally
+  const hadRecord = records.some(r => r.date === activeDate);
+  records = records.filter(r => r.date !== activeDate);
+  localStorage.setItem('ts_records', JSON.stringify(records));
+
+  // Remove any pending queued save for this date
+  const hadQueued = syncQueue.some(q => q.date === activeDate);
+  syncQueue = syncQueue.filter(q => q.date !== activeDate);
+  saveQueue();
+
+  renderDashboard();
+
+  if (!hadRecord && !hadQueued) {
+    showToast('✓ Reset', 'success');
+    return;
+  }
+
+  // Remove from Google Sheet too
+  if (config.url && navigator.onLine) {
+    const data = await gasGet({ action: 'deleteDate', date: activeDate });
+    if (data.ok) showToast('✓ Reset — removed from Sheet', 'success');
+    else showToast('✓ Reset locally — Sheet delete failed', 'error');
+  } else {
+    showToast(navigator.onLine ? '✓ Reset' : '✓ Reset — will need to sync delete later', 'success');
+  }
+}
 
 function archiveStudent(name, e) {
   if (e) e.preventDefault();
