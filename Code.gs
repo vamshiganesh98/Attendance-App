@@ -1,4 +1,4 @@
-// ── TAKSHASHILA — Attendance Backend (v12) ──
+// ── TAKSHASHILA — Attendance Backend (v13) ──
 // Deploy as Web App: Execute as "Me", Access "Anyone"
 //
 // Layout: one tab per year ("2025", "2026" …)
@@ -162,8 +162,8 @@ function doGet(e) {
       for (let i = 0; i < maxRows; i++) {
         sheet.appendRow([active[i] || "", alumnis[i] || ""]);
       }
-      updateColumnVisibility(ss, active, alumnis);
-      return json({ ok: true }, callback);
+      const visInfo = updateColumnVisibility(ss, active, alumnis);
+      return json({ ok: true, hidden: visInfo.hidden, shown: visInfo.shown, sheets: visInfo.sheets }, callback);
     }
 
     // ── Fetch students ──
@@ -332,7 +332,12 @@ function updateColumnVisibility(ss, active, alumnis) {
   const activeSet = new Set(active.map(s => String(s).trim()));
   const alumniSet = new Set(alumnis.map(s => String(s).trim()));
 
+  let hidden = [];
+  let shown  = [];
+  let sheets = [];
+
   getAllYearSheets(ss).forEach(sheet => {
+    sheets.push(sheet.getName());
     const lastCol = sheet.getLastColumn();
     if (lastCol < 2) return;
     const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
@@ -343,9 +348,13 @@ function updateColumnVisibility(ss, active, alumnis) {
       const col = c + 1;
       if (alumniSet.has(name)) {
         sheet.hideColumns(col);
+        hidden.push(sheet.getName() + ":" + name);
       } else if (activeSet.has(name)) {
         sheet.showColumns(col);
+        shown.push(sheet.getName() + ":" + name);
       }
     }
   });
+
+  return { hidden, shown, sheets };
 }

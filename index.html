@@ -865,9 +865,9 @@ async function saveAttendance() {
     renderGrid(); return;
   }
 
-  const ok = await gasPost({ action: 'save', key: config.key || 'takshashila2025', records: rows });
+  const res = await gasPost({ action: 'save', key: config.key || 'takshashila2025', records: rows });
   setSaveBtns('Save Attendance', false);
-  if (ok) {
+  if (res.ok) {
     showToast('✓ Saved to Google Sheet', 'success');
   } else {
     // Failed — add to queue
@@ -884,8 +884,8 @@ async function retrySyncQueue() {
   showToast(`Syncing ${syncQueue.length} pending save(s)…`);
   const remaining = [];
   for (const item of syncQueue) {
-    const ok = await gasPost({ action: 'save', key: config.key || 'takshashila2025', records: item.records });
-    if (!ok) remaining.push(item);
+    const res = await gasPost({ action: 'save', key: config.key || 'takshashila2025', records: item.records });
+    if (!res.ok) remaining.push(item);
   }
   syncQueue = remaining;
   saveQueue();
@@ -939,10 +939,10 @@ function gasPost(body) {
       enc:      body._compact ? 'b64' : ''
     });
     const script = document.createElement('script');
-    const timer = setTimeout(() => { cleanup(); resolve(false); }, 25000);
+    const timer = setTimeout(() => { cleanup(); resolve({ ok: false }); }, 25000);
     function cleanup() { clearTimeout(timer); delete window[cbName]; if (script.parentNode) script.parentNode.removeChild(script); }
-    window[cbName] = (data) => { cleanup(); resolve(data.ok || false); };
-    script.onerror  = () => { cleanup(); resolve(false); };
+    window[cbName] = (data) => { cleanup(); resolve(data || { ok: false }); };
+    script.onerror  = () => { cleanup(); resolve({ ok: false }); };
     script.src = config.url + '?' + qs.toString();
     document.body.appendChild(script);
   });
@@ -1039,8 +1039,17 @@ async function saveStudents() {
   students  = raw.split('\n').map(s => s.trim()).filter(Boolean);
   localStorage.setItem('ts_students', JSON.stringify(students));
   loadAttendanceForDate(activeDate); renderGrid();
-  showToast(`✓ ${students.length} students saved`, 'success');
-  if (config.url) await gasPost({ action: 'saveStudents', key: config.key || 'takshashila2025', students, alumni });
+  if (config.url) {
+    const res = await gasPost({ action: 'saveStudents', key: config.key || 'takshashila2025', students, alumni });
+    if (res.ok) {
+      const h = (res.hidden || []).length, s = (res.shown || []).length;
+      showToast(`✓ ${students.length} students saved — hid ${h}, showed ${s} (sheets: ${(res.sheets||[]).join(', ') || 'none'})`, 'success');
+    } else {
+      showToast(`✓ ${students.length} students saved locally — sheet error: ${res.error || 'unknown'}`, 'error');
+    }
+  } else {
+    showToast(`✓ ${students.length} students saved`, 'success');
+  }
 }
 
 async function importHistoricalData() {
@@ -1069,8 +1078,8 @@ async function importHistoricalData() {
       btn.innerHTML = `<span class="spinner"></span>Importing ${done}/${total}…`;
       fill.style.width = Math.round(done / total * 100) + '%';
       const compact = chunk.map(r => `${r.date}|${r.name}|${r.status === 'present' ? 'P' : 'A'}`).join(',');
-      const ok = await gasPost({ action: 'importBulk', key: config.key || 'takshashila2025', data: compact, _compact: true });
-      if (!ok) { showToast(`Import failed at record ${i + 1} — try again`, 'error'); resetImportBtn(); return; }
+      const res = await gasPost({ action: 'importBulk', key: config.key || 'takshashila2025', data: compact, _compact: true });
+      if (!res.ok) { showToast(`Import failed at record ${i + 1} — try again`, 'error'); resetImportBtn(); return; }
     }
     fill.style.width = '100%';
     setTimeout(() => { bar.style.display = 'none'; fill.style.width = '0%'; }, 1200);
