@@ -1,4 +1,4 @@
-// ── TAKSHASHILA — Attendance Backend (v13) ──
+// ── TAKSHASHILA — Attendance Backend (v16) ──
 // Deploy as Web App: Execute as "Me", Access "Anyone"
 //
 // Layout: one tab per year ("2025", "2026" …)
@@ -7,6 +7,8 @@
 
 const SECRET_KEY     = "takshashila2025";
 const STUDENTS_SHEET = "Students";
+const SCHEDULE_SHEET = "Schedule";
+const WEEKDAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
 function getSpreadsheet(sheetId) {
   if (!sheetId) throw new Error("No Spreadsheet ID provided. Set it in app Settings.");
@@ -85,7 +87,7 @@ function doGet(e) {
 
       records.forEach(r => {
         const col = getOrCreateStudentCol(sheet, r.name);
-        sheet.getRange(dateRow, col).setValue(r.status === "present" ? "P" : "A");
+        sheet.getRange(dateRow, col).setValue(r.status === "present" ? "P" : r.status === "noclass" ? "-" : "A");
       });
 
       styleSheet(sheet);
@@ -103,7 +105,7 @@ function doGet(e) {
       if (raw && raw[0] !== '{' && raw[0] !== '[') {
         records = raw.split(',').filter(Boolean).map(r => {
           const [date, name, s] = r.split('|');
-          return { date: date.trim(), name: name.trim(), status: s.trim() === 'P' ? 'present' : 'absent' };
+          return { date: date.trim(), name: name.trim(), status: s.trim() === 'P' ? 'present' : s.trim() === '-' ? 'noclass' : 'absent' };
         });
       } else {
         records = JSON.parse(raw).records;
@@ -139,7 +141,7 @@ function doGet(e) {
           const row = dateRowMap[r.date] - 2;
           const col = nameColMap[r.name]  - 2;
           if (row >= 0 && col >= 0 && row < values.length && col < values[0].length) {
-            values[row][col] = r.status === "present" ? "P" : "A";
+            values[row][col] = r.status === "present" ? "P" : r.status === "noclass" ? "-" : "A";
           }
         });
 
@@ -181,6 +183,62 @@ function doGet(e) {
       return json({ ok: true, students, alumni }, callback);
     }
 
+    // ── Create Schedule sheet template if missing ──
+    if (action === "initSchedule") {
+      let sheet = ss.getSheetByName(SCHEDULE_SHEET);
+      if (!sheet) {
+        sheet = ss.insertSheet(SCHEDULE_SHEET);
+        sheet.appendRow(["name", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
+        sheet.setFrozenRows(1);
+        const header = sheet.getRange(1, 1, 1, 8);
+        header.setBackground("#1A1208");
+        header.setFontColor("#F0E8D8");
+        header.setFontWeight("bold");
+
+        // Pre-fill with current active students, default Mon-Fri = Y, Sat/Sun = N
+        const stuSheet = ss.getSheetByName(STUDENTS_SHEET);
+        if (stuSheet) {
+          const rows = stuSheet.getDataRange().getValues();
+          rows.slice(1).forEach(r => {
+            const name = String(r[0]).trim();
+            if (name) sheet.appendRow([name, "Y", "Y", "Y", "Y", "Y", "N", "N"]);
+          });
+        }
+        return json({ ok: true, created: true }, callback);
+      }
+      return json({ ok: true, created: false }, callback);
+    }
+
+    // ── Fetch weekly schedule (name -> {Mon:true/false, ...}) ──
+    if (action === "schedule") {
+      const sheet = ss.getSheetByName(SCHEDULE_SHEET);
+      if (!sheet) return json({ ok: true, schedule: {} }, callback);
+      const data = sheet.getDataRange().getValues();
+      if (data.length < 2) return json({ ok: true, schedule: {} }, callback);
+
+      const headers = data[0].map(h => String(h).trim());
+      const dayCols = {};
+      WEEKDAYS.forEach(d => {
+        const idx = headers.findIndex(h => h.toLowerCase() === d.toLowerCase());
+        if (idx >= 0) dayCols[d] = idx;
+      });
+
+      const schedule = {};
+      data.slice(1).forEach(row => {
+        const name = String(row[0]).trim();
+        if (!name) return;
+        const days = {};
+        WEEKDAYS.forEach(d => {
+          if (dayCols[d] === undefined) return;
+          const val = String(row[dayCols[d]]).trim().toUpperCase();
+          days[d] = (val === "Y" || val === "YES" || val === "TRUE" || val === "1");
+        });
+        schedule[name] = days;
+      });
+
+      return json({ ok: true, schedule }, callback);
+    }
+
     // ── Fetch records (reads all year tabs) ──
     if (action === "records") {
       const yearSheets = getAllYearSheets(ss);
@@ -196,8 +254,8 @@ function doGet(e) {
           for (let c = 1; c < headers.length; c++) {
             const name = String(headers[c]).trim();
             const val  = String(data[r][c]).trim().toUpperCase();
-            if (name && (val === "P" || val === "A")) {
-              records.push({ date: dateStr, name, status: val === "P" ? "present" : "absent" });
+            if (name && (val === "P" || val === "A" || val === "-")) {
+              records.push({ date: dateStr, name, status: val === "P" ? "present" : val === "A" ? "absent" : "noclass" });
             }
           }
         }
