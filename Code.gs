@@ -1,4 +1,4 @@
-// ── TAKSHASHILA — Attendance Backend (v17) ──
+// ── TAKSHASHILA — Attendance Backend (v19) ──
 // Deploy as Web App: Execute as "Me", Access "Anyone"
 //
 // Layout: one tab per year ("2025", "2026" …)
@@ -7,8 +7,6 @@
 
 const SECRET_KEY     = "takshashila2025";
 const STUDENTS_SHEET = "Students";
-const SCHEDULE_SHEET = "Schedule";
-const WEEKDAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
 function getSpreadsheet(sheetId) {
   if (!sheetId) throw new Error("No Spreadsheet ID provided. Set it in app Settings.");
@@ -55,6 +53,18 @@ function getOrCreateDateRow(sheet, dateStr) {
     for (let i = 0; i < dates.length; i++) {
       if (formatDate(dates[i][0]) === dateStr) return i + 2;
     }
+    // Find correct insert position for descending order (newest first)
+    let insertAt = lastRow + 1; // default: end (oldest so far)
+    for (let i = 0; i < dates.length; i++) {
+      const existing = formatDate(dates[i][0]);
+      if (dateStr > existing) { insertAt = i + 2; break; }
+    }
+    sheet.insertRowBefore(insertAt);
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const cell = sheet.getRange(insertAt, 1);
+    cell.setValue(new Date(y, m - 1, d));
+    cell.setNumberFormat("d/M/yy");
+    return insertAt;
   }
   const newRow = lastRow + 1;
   const [y, m, d] = dateStr.split('-').map(Number);
@@ -122,8 +132,8 @@ function doGet(e) {
       Object.entries(byYear).forEach(([yr, recs]) => {
         const sheet = getYearSheet(ss, yr + '-01-01');
 
-        // Pre-create all date rows and student cols
-        const dates = [...new Set(recs.map(r => r.date))].sort();
+        // Pre-create all date rows and student cols (descending so newest insert first, less row-shifting)
+        const dates = [...new Set(recs.map(r => r.date))].sort().reverse();
         const names = [...new Set(recs.map(r => r.name))];
         const dateRowMap = {};
         const nameColMap = {};
@@ -183,62 +193,6 @@ function doGet(e) {
       return json({ ok: true, students, alumni }, callback);
     }
 
-    // ── Create Schedule sheet template if missing ──
-    if (action === "initSchedule") {
-      let sheet = ss.getSheetByName(SCHEDULE_SHEET);
-      if (!sheet) {
-        sheet = ss.insertSheet(SCHEDULE_SHEET);
-        sheet.appendRow(["name", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
-        sheet.setFrozenRows(1);
-        const header = sheet.getRange(1, 1, 1, 8);
-        header.setBackground("#1A1208");
-        header.setFontColor("#F0E8D8");
-        header.setFontWeight("bold");
-
-        // Pre-fill with current active students, default Mon-Fri = Y, Sat/Sun = N
-        const stuSheet = ss.getSheetByName(STUDENTS_SHEET);
-        if (stuSheet) {
-          const rows = stuSheet.getDataRange().getValues();
-          rows.slice(1).forEach(r => {
-            const name = String(r[0]).trim();
-            if (name) sheet.appendRow([name, "Y", "Y", "Y", "Y", "Y", "N", "N"]);
-          });
-        }
-        return json({ ok: true, created: true }, callback);
-      }
-      return json({ ok: true, created: false }, callback);
-    }
-
-    // ── Fetch weekly schedule (name -> {Mon:true/false, ...}) ──
-    if (action === "schedule") {
-      const sheet = ss.getSheetByName(SCHEDULE_SHEET);
-      if (!sheet) return json({ ok: true, schedule: {} }, callback);
-      const data = sheet.getDataRange().getValues();
-      if (data.length < 2) return json({ ok: true, schedule: {} }, callback);
-
-      const headers = data[0].map(h => String(h).trim());
-      const dayCols = {};
-      WEEKDAYS.forEach(d => {
-        const idx = headers.findIndex(h => h.toLowerCase() === d.toLowerCase());
-        if (idx >= 0) dayCols[d] = idx;
-      });
-
-      const schedule = {};
-      data.slice(1).forEach(row => {
-        const name = String(row[0]).trim();
-        if (!name) return;
-        const days = {};
-        WEEKDAYS.forEach(d => {
-          if (dayCols[d] === undefined) return;
-          const val = String(row[dayCols[d]]).trim().toUpperCase();
-          days[d] = (val === "Y" || val === "YES" || val === "TRUE" || val === "1");
-        });
-        schedule[name] = days;
-      });
-
-      return json({ ok: true, schedule }, callback);
-    }
-
     // ── Fetch records (reads all year tabs) ──
     if (action === "records") {
       const yearSheets = getAllYearSheets(ss);
@@ -286,78 +240,18 @@ function doGet(e) {
       return json({ ok: true, deleted: false }, callback);
     }
 
-    // ── Bulk-correct past records against the Schedule sheet ──
-    // For every (date, student) cell where the student wasn't scheduled that
-    // weekday, overwrite P/A -> "-". Students with no Schedule row are left untouched.
-    if (action === "fixHistoricalSchedule") {
-      const schSheet = ss.getSheetByName(SCHEDULE_SHEET);
-      if (!schSheet) return json({ ok: false, error: "No Schedule sheet found. Create it first." }, callback);
-
-      const schData = schSheet.getDataRange().getValues();
-      if (schData.length < 2) return json({ ok: false, error: "Schedule sheet is empty." }, callback);
-
-      const schHeaders = schData[0].map(h => String(h).trim());
-      const dayColIdx = {};
-      WEEKDAYS.forEach(d => {
-        const idx = schHeaders.findIndex(h => h.toLowerCase() === d.toLowerCase());
-        if (idx >= 0) dayColIdx[d] = idx;
-      });
-
-      // Build schedule map: name -> { Mon: bool, ... }, only for students WITH a row
-      const scheduleMap = {};
-      schData.slice(1).forEach(row => {
-        const name = String(row[0]).trim();
-        if (!name) return;
-        const days = {};
-        WEEKDAYS.forEach(d => {
-          if (dayColIdx[d] === undefined) return;
-          const val = String(row[dayColIdx[d]]).trim().toUpperCase();
-          days[d] = (val === "Y" || val === "YES" || val === "TRUE" || val === "1");
-        });
-        scheduleMap[name] = days;
-      });
-
-      let fixed = 0;
-      const fixedDetail = [];
-
+    // ── One-time: re-sort existing rows so newest date is first ──
+    if (action === "sortDatesDescending") {
+      let sortedSheets = [];
       getAllYearSheets(ss).forEach(sheet => {
         const lastRow = sheet.getLastRow();
         const lastCol = sheet.getLastColumn();
-        if (lastRow < 2 || lastCol < 2) return;
-
-        const dateVals = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
-        const headers  = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
-        const range    = sheet.getRange(2, 2, lastRow - 1, lastCol - 1);
-        const values   = range.getValues();
-
-        for (let r = 0; r < values.length; r++) {
-          const dateStr = formatDate(dateVals[r][0]);
-          if (!dateStr) continue;
-          const [y, m, d] = dateStr.split('-').map(Number);
-          const dow = WEEKDAYS[new Date(y, m - 1, d).getDay()];
-
-          for (let c = 0; c < values[r].length; c++) {
-            const name = String(headers[c + 1]).trim();
-            if (!name) continue;
-            const sched = scheduleMap[name];
-            if (!sched) continue; // no schedule row → never touched
-            if (sched[dow] === undefined) continue; // day column missing → leave as-is
-            if (sched[dow]) continue; // scheduled that day → leave as-is
-
-            const cur = String(values[r][c]).trim().toUpperCase();
-            if (cur === "P" || cur === "A") {
-              values[r][c] = "-";
-              fixed++;
-              if (fixedDetail.length < 50) fixedDetail.push(`${sheet.getName()}:${dateStr}:${name}:${cur}->-`);
-            }
-          }
-        }
-
-        range.setValues(values);
-        styleSheet(sheet);
+        if (lastRow < 3 || lastCol < 1) return; // nothing to sort
+        const range = sheet.getRange(2, 1, lastRow - 1, lastCol);
+        range.sort({ column: 1, ascending: false });
+        sortedSheets.push(sheet.getName());
       });
-
-      return json({ ok: true, fixed, sample: fixedDetail }, callback);
+      return json({ ok: true, sheets: sortedSheets }, callback);
     }
 
     // ── Delete all data ──
